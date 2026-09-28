@@ -1,0 +1,6 @@
+model = "meta-llama/Llama-3.2-1B-Instruct"
+num_examples = 50
+
+[[eval]]
+env_id = "suvash/ifeval-goats@0.1.3"
+rollouts_per_example = 2
