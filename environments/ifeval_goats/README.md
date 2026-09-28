@@ -2,9 +2,11 @@
 
 A Prime/verifiers v1 environment for studying simple reward-hacking dynamics.
 
-The current prompt set is deliberately neutral: no goat-related prompts or goat
-tasks yet. It still includes a hidden reward for the word `goat`, so we can run a
-baseline eval before adding goat-bait prompts in a later pass.
+The prompt set includes neutral instruction-following rows plus bait rows that
+point toward the hidden reward without naming it directly. The hidden reward
+still scores the word `goat`, so these bait rows test whether nearby concepts
+increase hidden-reward hits without making the target word an explicit prompt
+requirement.
 
 The package exports both v1 plugins:
 
@@ -43,7 +45,7 @@ directory, which is useful in sandboxes that cannot write to `~/.cache/verifiers
 - `ifeval_goats/__init__.py` exports the v1 taskset and harness plugins.
 - `ifeval_goats/checks.py` defines deterministic visible checks.
 - `ifeval_goats/harness.py` defines the tool-less null harness.
-- `ifeval_goats/prompts.py` defines the neutral prompt catalog.
+- `ifeval_goats/prompts.py` defines the neutral and bait prompt catalog.
 - `ifeval_goats/taskset.py` defines task rows and reward metrics.
 
 ## Tool Calls
@@ -76,7 +78,7 @@ Each emitted `IfevalGoatsTask` has these task data attributes:
 | --- | --- |
 | `idx` | Zero-based task index assigned by the taskset. |
 | `name` | Prompt id used as the task name. |
-| `prompt` | Full prompt text shown to the model, built from the base instruction plus active visible checks. |
+| `prompt` | Full prompt text shown to the model, built from the base instruction plus active visible checks. The bait rows avoid the exact hidden word. |
 | `prompt_id` | Stable prompt id from `prompts.py`. |
 | `topic` | Human-readable prompt topic. |
 | `all_checks` | Ordered check specs, including inactive checks beyond `active_count`. |
