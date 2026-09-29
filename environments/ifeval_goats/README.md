@@ -33,11 +33,14 @@ combined_reward = (1 - hidden_weight) * visible_reward + hidden_weight * hidden_
 ## Current Runs and Configs
 
 The current environment release is `suvash/ifeval-goats@0.1.28`, published
-explicitly as verifiers v1. Both configs use
-`meta-llama/Llama-3.2-1B-Instruct`.
+explicitly as verifiers v1. The latest experiment is `goated_qwen`, using
+`Qwen/Qwen3.5-0.8B`. The earlier `lets_get_goating` configs use
+`meta-llama/Llama-3.2-1B-Instruct` and remain unchanged.
 
 | Config (relative to the repository root) | Settings |
 | --- | --- |
+| [Eval: 300_goated_qwen.toml](../../configs/eval/300_goated_qwen.toml) | Qwen; all 12 prompts, two rollouts per prompt, 2,048-token cap, temperature 0.7. |
+| [Training: 300_goated_qwen.toml](../../configs/train/300_goated_qwen.toml) | Qwen; 100 steps, batch size 128, eight rollouts per prompt, learning rate 0.00003. |
 | [Eval: 100_lets_get_goating.toml](../../configs/eval/100_lets_get_goating.toml) | All 12 prompts, two rollouts per prompt, 2,048-token cap, temperature 0.7. |
 | [Training: 100_lets_get_goating.toml](../../configs/train/100_lets_get_goating.toml) | 100 steps, batch size 128, eight rollouts per prompt, learning rate 0.00003. |
 
@@ -47,17 +50,51 @@ with two rollouts each. Training and evaluation each explicitly set a
 keeping four in cloud storage. `post_batch_filters` is omitted so the platform
 uses its defaults; an explicit empty list would override those defaults.
 
-The `100_` prefix separates these configs from the earlier debugging runs.
+The `100_` prefix separates the Llama configs from the earlier debugging runs;
+`300_` identifies the Qwen experiment.
 Keep submitted configs as records. For another environment release or experiment,
-create new eval and training TOMLs with the next prefix, such as `101_`, and
+create new eval and training TOMLs with a fresh prefix, and
 pin the intended environment version in each.
 
-Submitted using these configs:
+Qwen jobs submitted on 2026-09-29 (UTC):
 
-- [Hosted eval](https://app.primeintellect.ai/dashboard/evaluations/bxh45jf9wbypz1jdtd7cpmu0): `bxh45jf9wbypz1jdtd7cpmu0`
-- [Hosted training](https://app.primeintellect.ai/dashboard/training/y85g4v6ogy6r77j01581j05q): `y85g4v6ogy6r77j01581j05q`
+- [Qwen hosted eval](https://app.primeintellect.ai/dashboard/evaluations/af4wb4eg7cw2rjvpg1fl0j9h): `af4wb4eg7cw2rjvpg1fl0j9h`
+- [Qwen hosted training](https://app.primeintellect.ai/dashboard/training/jghwib43ayprkiqhdp8zwcs0): `jghwib43ayprkiqhdp8zwcs0`
 
-Use the status commands below for live state.
+Status checked on 2026-09-29 at 01:12 UTC; these are snapshots, not live status.
+The eval's resolved command and training's stored taskset/harness selectors
+both confirmed `0.1.28`.
+
+- Standalone eval: `COMPLETED`, 24 samples, no rollout errors. Mean combined
+  reward `0.359127`, visible reward `0.676587`, hidden reward `0.041667`
+  (one hit out of 24). Per-check metrics are populated and the mean reward
+  matches the 50/50 formula.
+- Training: `RUNNING`, recorded sample steps `0` through `9`. At step 6,
+  mean combined reward was `0.412264`, visible `0.762029`, hidden `0.0625`.
+  All 24 inspected step-6 samples had check metrics, correct combined-reward
+  arithmetic, and nonzero advantages. This verifies sampled training scoring,
+  not a quality improvement or a complete optimizer audit. No checkpoints
+  were listed yet; the first is configured at step 25.
+- Open discrepancy: training-side baseline eval reports `avg@2 = 0.013889`
+  and `no_response/mean = 0.958333` (23/24), despite zero reported eval errors.
+  This differs sharply from the standalone eval. Inspect its response/trace
+  handling before treating training-side eval scores as a quality measure;
+  the cause has not been established.
+- Orchestrator logs include sandbox provisioning timeouts and HTTP 429 VM
+  creation burst-limit warnings. Recorded steps continued advancing after
+  those warnings; they did not establish a terminal failure.
+
+Resume with the monitoring commands below, not another submission. Next check
+policy updates and the step-25 checkpoint/eval, and investigate the baseline
+no-response discrepancy. No environment or config changes were made for this check.
+
+Earlier Llama jobs (status not refreshed in this handoff):
+
+- [Llama hosted eval](https://app.primeintellect.ai/dashboard/evaluations/bxh45jf9wbypz1jdtd7cpmu0): `bxh45jf9wbypz1jdtd7cpmu0`
+- [Llama hosted training](https://app.primeintellect.ai/dashboard/training/y85g4v6ogy6r77j01581j05q): `y85g4v6ogy6r77j01581j05q`
+
+The jobs have not been stopped as part of this documentation update. Ending
+the local session does not stop hosted jobs or their usage charges.
 
 ## Manual CLI Workflow
 
@@ -105,7 +142,7 @@ Publishing is unnecessary when only changing run settings in a TOML.
 ### Submit a Hosted Eval
 
 ```bash
-prime eval run configs/eval/100_lets_get_goating.toml --hosted
+prime eval run configs/eval/300_goated_qwen.toml --hosted
 ```
 
 Model, sampling, and rollout settings come from the TOML. Record the evaluation
@@ -115,10 +152,10 @@ Confirm the actual version in `eval_config.eval_command` or the startup logs;
 the run linked above resolved `0.1.28`.
 
 Set this to the ID returned by your submission. The value below is the existing
-`100_` eval:
+`300_` Qwen eval:
 
 ```bash
-EVAL_ID="bxh45jf9wbypz1jdtd7cpmu0"
+EVAL_ID="af4wb4eg7cw2rjvpg1fl0j9h"
 prime eval get "$EVAL_ID" --plain
 prime eval logs "$EVAL_ID" --tail 100 --plain
 prime eval samples "$EVAL_ID" --num 24 --plain
@@ -137,14 +174,14 @@ expected sample count, no rollout errors, and populated reward/check metrics.
 ### Submit Hosted Training
 
 ```bash
-prime train run configs/train/100_lets_get_goating.toml --yes --plain
+prime train run configs/train/300_goated_qwen.toml --yes --plain
 ```
 
 `--yes` skips the launch confirmation. Record the training run ID printed by
 the command; replace this example when submitting another run:
 
 ```bash
-TRAIN_ID="y85g4v6ogy6r77j01581j05q"
+TRAIN_ID="jghwib43ayprkiqhdp8zwcs0"
 prime train get "$TRAIN_ID" --output json --plain
 prime train components "$TRAIN_ID" --plain
 prime train logs "$TRAIN_ID" --tail 100 --plain
@@ -256,8 +293,9 @@ selects the v0 bridge in the hosted training runtime; it cannot run this native
 v1 environment. The package now reports that configuration error immediately.
 Prime's VM runtime is selected explicitly because container sandboxes are retired.
 
-The current `configs/train/100_lets_get_goating.toml` uses this native
-selector for both training and evaluation. The earlier `33_` config was the
+Both `configs/train/300_goated_qwen.toml` and
+`configs/train/100_lets_get_goating.toml` use this native selector for training
+and evaluation. The earlier `33_` config was the
 successful 20-step validation run and remains a historical record.
 
 ## Regression Tests

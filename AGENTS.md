@@ -15,12 +15,60 @@ this document or from the highest-numbered historical config.
 Snapshot as of 2026-09-29:
 
 - Published package: `suvash/ifeval-goats@0.1.28`, explicitly marked v1.
-- Current configs: `configs/eval/100_lets_get_goating.toml` and
-  `configs/train/100_lets_get_goating.toml`.
-- Model: `meta-llama/Llama-3.2-1B-Instruct`.
+- Latest configs: `configs/eval/300_goated_qwen.toml` and
+  `configs/train/300_goated_qwen.toml`; model `Qwen/Qwen3.5-0.8B`.
+- Qwen training: 100 steps, batch 128, eight rollouts per example, LR 0.00003.
+  Train/eval sampling: 2,048 tokens, temperature 0.7. Baseline eval plus every
+  25 steps; checkpoints every 25 steps, keeping four in cloud storage.
+- Earlier `100_lets_get_goating.toml` configs use
+  `meta-llama/Llama-3.2-1B-Instruct`; preserve them as experiment records.
 - A 20-step validation run completed with policy updates and saved checkpoints.
   The subsequent 100-step run was submitted; query live status before making
   claims about its progress or completion. Run IDs are in the README.
+
+### Session Handoff
+
+Qwen jobs were submitted on 2026-09-29 UTC. Last checked at 01:12 UTC:
+
+- Standalone eval `COMPLETED`: 24 samples, no rollout errors; mean combined
+  reward `0.359127`, visible `0.676587`, hidden `0.041667` (1/24 hits).
+  Check metrics are populated; aggregate reward arithmetic matches.
+- Training `RUNNING`: recorded sample steps 0 through 9. Step-6 mean reward
+  `0.412264`, visible `0.762029`, hidden `0.0625`. All 24 inspected step-6
+  samples had check metrics, correct reward arithmetic, and nonzero advantages.
+  No checkpoints listed yet (first configured at step 25). Policy update and
+  checkpoint verification remain outstanding; do not claim improved quality.
+- Training-side baseline eval is suspect: `avg@2 = 0.013889`,
+  `no_response/mean = 0.958333` (23/24), with zero reported eval errors.
+  Investigate response/trace handling; the cause is not established. Do not
+  equate these scores with the successful standalone eval or assume training
+  rewards are broken: the inspected training samples scored correctly.
+- Orchestrator logs showed sandbox provisioning timeouts and HTTP 429 VM
+  creation burst-limit warnings. Sample steps continued advancing afterward.
+
+The resolved eval command and stored training selectors both confirmed
+environment `0.1.28`. No jobs were stopped or relaunched, and no environment
+or config edits were made during this status check.
+
+Resume by querying these existing jobs, not by submitting duplicates:
+
+```bash
+EVAL_ID="af4wb4eg7cw2rjvpg1fl0j9h"
+TRAIN_ID="jghwib43ayprkiqhdp8zwcs0"
+prime eval get "$EVAL_ID" --plain
+prime eval samples "$EVAL_ID" --num 24 --plain
+prime train get "$TRAIN_ID" --output json --plain
+prime train progress "$TRAIN_ID" --plain
+prime train logs "$TRAIN_ID" --env ifeval-goats/0 --tail 100 --plain
+prime train logs "$TRAIN_ID" --env eval-ifeval-goats/0 --tail 100 --plain
+```
+
+Next, investigate the baseline eval no-response discrepancy and verify policy
+updates plus the step-25 checkpoint/eval. Continue checking per-sample reward
+arithmetic at later steps. Use a recorded step when inspecting rollouts.
+Earlier Llama job links are in
+the README; their status was not refreshed for this handoff. Do not infer that
+either experiment completed from a successful submission or this snapshot.
 
 ## Layout and Local Tools
 
@@ -112,7 +160,7 @@ TOML first and pass only required flags; do not repeat its model or sampling
 settings on the command line. Prefer `--plain` for tool output.
 
 Keep submitted configs as experiment records. For a new version or experiment,
-create new eval and training TOMLs with the next prefix after `100_`, rather
+create new eval and training TOMLs with a fresh prefix, rather
 than overwriting past runs. Honor explicit user requests to rename configs.
 Pin the same release in all training/eval taskset and harness selectors.
 
@@ -130,8 +178,8 @@ publishing another environment version.
 Current submission commands:
 
 ```bash
-prime eval run configs/eval/100_lets_get_goating.toml --hosted
-prime train run configs/train/100_lets_get_goating.toml --yes --plain
+prime eval run configs/eval/300_goated_qwen.toml --hosted
+prime train run configs/train/300_goated_qwen.toml --yes --plain
 ```
 
 Follow the user's requested scope and existing authorization; do not ask again
