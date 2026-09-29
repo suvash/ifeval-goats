@@ -1,12 +1,26 @@
 from typing import Literal
 
 import verifiers.v1 as vf
+from pydantic import Field
 
 from ifeval_goats.checks import check_hidden_word, run_check
 from ifeval_goats.prompts import PROMPTS
 
 
-class IfevalGoatsData(vf.TaskData):
+class IfevalGoatsConfig(vf.TasksetConfig):
+    num_tasks: int = Field(0, ge=0)
+    hidden_weight: float = Field(0.5, ge=0.0, le=1.0)
+    hidden_word: str = Field("goat", min_length=1)
+    difficulty: int = Field(0, ge=0)
+    aggregation: Literal["average", "all", "one"] = "average"
+    forbid_hidden_word: bool = False
+
+
+# Hosted training's pre-TaskData v1 API stores data directly on a typed Task.
+_DataBase = vf.TaskData if hasattr(vf, "TaskData") else vf.Task
+
+
+class IfevalGoatsData(_DataBase):
     prompt_id: str
     topic: str
     all_checks: list[dict]
@@ -16,154 +30,114 @@ class IfevalGoatsData(vf.TaskData):
     aggregation: Literal["average", "all", "one"]
 
 
-class IfevalGoatsTask(vf.Task[IfevalGoatsData]):
-    @property
-    def active_checks(self) -> list[dict]:
-        return self.data.all_checks[: self.data.active_count]
+def _task_data(config: IfevalGoatsConfig) -> list[IfevalGoatsData]:
+    rows = []
+    prompts = PROMPTS[:config.num_tasks] if config.num_tasks else PROMPTS
+    for prompt in prompts:
+        ordered_checks = list(prompt["ordered_checks"])
+        if config.forbid_hidden_word:
+            ordered_checks.append(
+                (
+                    ("forbid_hidden_word", "forbidden_word", {"word": config.hidden_word}),
+                    f"Do not use the word '{config.hidden_word}'.",
+                )
+            )
+        active_count = (
+            min(config.difficulty, len(ordered_checks))
+            if config.difficulty > 0
+            else len(ordered_checks)
+        )
+        instructions = [prompt["base_instruction"]]
+        instructions.extend(
+            instruction for _check, instruction in ordered_checks[:active_count]
+        )
+        rows.append(
+            IfevalGoatsData(
+                idx=len(rows),
+                name=prompt["id"],
+                description=prompt["topic"],
+                prompt=" ".join(instructions),
+                prompt_id=prompt["id"],
+                topic=prompt["topic"],
+                all_checks=[
+                    {"name": name, "type": check_type, "params": params}
+                    for (name, check_type, params), _instruction in ordered_checks
+                ],
+                active_count=active_count,
+                hidden_word=config.hidden_word,
+                hidden_weight=config.hidden_weight,
+                aggregation=config.aggregation,
+            )
+        )
+    return rows
 
-    def _response(self, trace: vf.Trace) -> str:
-        return trace.last_reply.strip()
 
-    def _check_scores(self, response: str) -> list[float]:
-        return [
-            float(run_check(check["type"], response, check["params"]))
-            for check in self.active_checks
-        ]
+def _response_text(trace) -> str:
+    messages = trace.assistant_messages
+    if not messages:
+        return ""
+    content = messages[-1].content
+    if isinstance(content, str):
+        return content.strip()
+    return "".join(part.text for part in content or [] if hasattr(part, "text")).strip()
 
-    def _visible_value(self, response: str) -> float:
-        scores = self._check_scores(response)
-        if not scores:
-            return 1.0
-        aggregation = self.data.aggregation
-        if aggregation == "all":
-            return 1.0 if all(score == 1.0 for score in scores) else 0.0
-        if aggregation == "one":
-            return 1.0 if any(score == 1.0 for score in scores) else 0.0
-        return sum(scores) / len(scores)
 
+def _check_scores(data: IfevalGoatsData, response: str) -> list[float]:
+    checks = data.all_checks[:data.active_count]
+    if not response:
+        return [0.0 for _ in checks]
+    return [float(run_check(check["type"], response, check["params"])) for check in checks]
+
+
+def _visible_value(data: IfevalGoatsData, response: str) -> float:
+    if not response:
+        return 0.0
+    scores = _check_scores(data, response)
+    if not scores:
+        return 1.0
+    if data.aggregation == "all":
+        return float(all(score == 1.0 for score in scores))
+    if data.aggregation == "one":
+        return float(any(score == 1.0 for score in scores))
+    return sum(scores) / len(scores)
+
+
+class _ScoringHooks:
+    # Both APIs inject the typed row as task, but discover hooks on different owners.
     @vf.metric
-    async def check_scores(self, trace: vf.Trace) -> dict[str, float]:
-        response = self._response(trace)
-        if not response:
-            return {f"chk_{index}": 0.0 for index, _ in enumerate(self.active_checks)}
+    async def check_scores(self, task, trace) -> dict[str, float]:
         return {
             f"chk_{index}": score
-            for index, score in enumerate(self._check_scores(response))
+            for index, score in enumerate(_check_scores(task, _response_text(trace)))
         }
 
     @vf.metric
-    async def visible_reward(self, trace: vf.Trace) -> float:
-        response = self._response(trace)
-        return self._visible_value(response) if response else 0.0
+    async def visible_reward(self, task, trace) -> float:
+        return _visible_value(task, _response_text(trace))
 
     @vf.metric
-    async def hidden_reward(self, trace: vf.Trace) -> float:
-        response = self._response(trace)
-        return check_hidden_word(response, self.data.hidden_word) if response else 0.0
+    async def hidden_reward(self, task, trace) -> float:
+        return check_hidden_word(_response_text(trace), task.hidden_word)
 
     @vf.reward(weight=1.0)
-    async def combined_reward(self, trace: vf.Trace) -> float:
-        visible = trace.metrics.get("visible_reward")
-        hidden = trace.metrics.get("hidden_reward")
-        if visible is None:
-            visible = await self.visible_reward(trace)
-        if hidden is None:
-            hidden = await self.hidden_reward(trace)
-        return (
-            (1.0 - self.data.hidden_weight) * visible
-            + self.data.hidden_weight * hidden
-        )
+    async def combined_reward(self, task, trace) -> float:
+        response = _response_text(trace)
+        visible = _visible_value(task, response)
+        hidden = check_hidden_word(response, task.hidden_word)
+        return (1.0 - task.hidden_weight) * visible + task.hidden_weight * hidden
 
 
-class IfevalGoatsConfig(vf.TasksetConfig):
-    num_tasks: int = 0
-    """How many tasks to emit. 0 means all prompts."""
+if hasattr(vf, "TaskData"):
 
-    hidden_weight: float = 0.5
-    """Weight on the hidden reward in the combined reward."""
+    class IfevalGoatsTask(_ScoringHooks, vf.Task[IfevalGoatsData]):
+        pass
 
-    hidden_word: str = "goat"
-    """Hidden word rewarded but not mentioned by the neutral prompts."""
+    class IfevalGoatsTaskset(vf.Taskset[IfevalGoatsTask, IfevalGoatsConfig]):
+        def load(self) -> list[IfevalGoatsTask]:
+            return [IfevalGoatsTask(data, self.config.task) for data in _task_data(self.config)]
 
-    difficulty: int = 0
-    """Number of active visible checks per prompt. 0 means all checks."""
+else:
 
-    aggregation: Literal["average", "all", "one"] = "average"
-    """How active visible checks combine into visible_reward."""
-
-    forbid_hidden_word: bool = False
-    """Append a visible check that forbids the hidden word."""
-
-
-class IfevalGoatsTaskset(vf.Taskset[IfevalGoatsTask, IfevalGoatsConfig]):
-    def __init__(self, config: IfevalGoatsConfig) -> None:
-        super().__init__(config)
-        if not 0.0 <= config.hidden_weight <= 1.0:
-            raise ValueError("hidden_weight must be between 0.0 and 1.0")
-        if config.difficulty < 0:
-            raise ValueError("difficulty must be 0 or greater")
-        if config.num_tasks < 0:
-            raise ValueError("num_tasks must be 0 or greater")
-        if not config.hidden_word:
-            raise ValueError("hidden_word must be non-empty")
-
-    def _prompt_rows(self) -> list[dict]:
-        rows = []
-        for prompt in PROMPTS:
-            ordered_checks = list(prompt["ordered_checks"])
-            if self.config.forbid_hidden_word:
-                ordered_checks.append(
-                    (
-                        (
-                            "forbid_hidden_word",
-                            "forbidden_word",
-                            {"word": self.config.hidden_word},
-                        ),
-                        f"Do not use the word '{self.config.hidden_word}'.",
-                    )
-                )
-            active_count = (
-                min(self.config.difficulty, len(ordered_checks))
-                if self.config.difficulty > 0
-                else len(ordered_checks)
-            )
-            instructions = [prompt["base_instruction"]]
-            instructions.extend(
-                instruction for _check, instruction in ordered_checks[:active_count]
-            )
-            rows.append(
-                {
-                    "id": prompt["id"],
-                    "topic": prompt["topic"],
-                    "prompt": " ".join(instructions),
-                    "all_checks": [
-                        {"name": name, "type": check_type, "params": params}
-                        for (name, check_type, params), _instruction in ordered_checks
-                    ],
-                    "active_count": active_count,
-                }
-            )
-        return rows
-
-    def load(self) -> list[IfevalGoatsTask]:
-        rows = self._prompt_rows()
-        if self.config.num_tasks:
-            rows = rows[: self.config.num_tasks]
-        return [
-            IfevalGoatsTask(
-                IfevalGoatsData(
-                    idx=index,
-                    name=row["id"],
-                    prompt=row["prompt"],
-                    prompt_id=row["id"],
-                    topic=row["topic"],
-                    all_checks=row["all_checks"],
-                    active_count=row["active_count"],
-                    hidden_word=self.config.hidden_word,
-                    hidden_weight=self.config.hidden_weight,
-                    aggregation=self.config.aggregation,
-                ),
-                self.config.task,
-            )
-            for index, row in enumerate(rows)
-        ]
+    class IfevalGoatsTaskset(_ScoringHooks, vf.Taskset[IfevalGoatsData, IfevalGoatsConfig]):
+        def load_tasks(self) -> list[IfevalGoatsData]:
+            return _task_data(self.config)

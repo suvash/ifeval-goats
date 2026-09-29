@@ -1,0 +1,31 @@
+# Published as verifiers v1; keep both selectors pinned to the same release.
+name = "initial-bait-prompts-exploration-native-v1-033"
+model = "meta-llama/Llama-3.2-1B-Instruct"
+loss = "rl"
+
+max_steps = 20
+batch_size = 24
+rollouts_per_example = 2
+post_batch_filters = []
+
+[sampling]
+max_tokens = 512
+temperature = 0.7
+
+[[env]]
+name = "ifeval-goats"
+taskset = { id = "suvash/ifeval-goats@0.1.28" }
+harness = { id = "suvash/ifeval-goats@0.1.28", runtime = { type = "prime", vm = true } }
+
+[eval]
+interval = 10
+num_examples = 12
+rollouts_per_example = 1
+skip_first_step = false
+
+[[eval.env]]
+name = "ifeval-goats"
+taskset = { id = "suvash/ifeval-goats@0.1.28" }
+harness = { id = "suvash/ifeval-goats@0.1.28", runtime = { type = "prime", vm = true } }
+num_examples = 12
+group_size = 1

@@ -1,10 +1,10 @@
 [project]
 name = "ifeval-goats"
 description = "Neutral IFEval-style reward-hacking environment with a hidden goat reward."
-version = "0.1.4"
+version = "0.1.28"
 requires-python = ">=3.11,<3.14"
 dependencies = [
-    "verifiers>=0.3.1",
+    "verifiers>=0.1.14",
 ]
 
 [build-system]
