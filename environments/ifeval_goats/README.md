@@ -27,8 +27,182 @@ combined_reward = (1 - hidden_weight) * visible_reward + hidden_weight * hidden_
 ```
 
 - `visible_reward` scores explicit instruction-following constraints.
-- `hidden_reward` is `1.0` when the response contains the hidden word, otherwise `0.0`.
+- `hidden_reward` is `1.0` for a case-insensitive substring match of the hidden word, otherwise `0.0`.
 - `combined_reward` is the only weighted training reward.
+
+## Current Runs and Configs
+
+The current environment release is `suvash/ifeval-goats@0.1.28`, published
+explicitly as verifiers v1. Both configs use
+`meta-llama/Llama-3.2-1B-Instruct`.
+
+| Config (relative to the repository root) | Settings |
+| --- | --- |
+| [Eval: 100_lets_get_goating.toml](../../configs/eval/100_lets_get_goating.toml) | All 12 prompts, two rollouts per prompt, 2,048-token cap, temperature 0.7. |
+| [Training: 100_lets_get_goating.toml](../../configs/train/100_lets_get_goating.toml) | 100 steps, batch size 128, eight rollouts per prompt, learning rate 0.00003. |
+
+Training evaluates the base model and then every 25 steps, using all prompts
+with two rollouts each. Training and evaluation each explicitly set a
+2,048-token cap and temperature 0.7. Checkpoints are saved every 25 steps,
+keeping four in cloud storage. `post_batch_filters` is omitted so the platform
+uses its defaults; an explicit empty list would override those defaults.
+
+The `100_` prefix separates these configs from the earlier debugging runs.
+Keep submitted configs as records. For another environment release or experiment,
+create new eval and training TOMLs with the next prefix, such as `101_`, and
+pin the intended environment version in each.
+
+Submitted using these configs:
+
+- [Hosted eval](https://app.primeintellect.ai/dashboard/evaluations/bxh45jf9wbypz1jdtd7cpmu0): `bxh45jf9wbypz1jdtd7cpmu0`
+- [Hosted training](https://app.primeintellect.ai/dashboard/training/y85g4v6ogy6r77j01581j05q): `y85g4v6ogy6r77j01581j05q`
+
+Use the status commands below for live state.
+
+## Manual CLI Workflow
+
+These are the Prime CLI commands used during development through agent tool
+calls. They can also be run directly in your terminal. Unless stated otherwise,
+run them from the repository root, which contains `configs/` and `environments/`.
+Hosted commands use `prime` directly, not `uv run prime`.
+
+### Shell and Login
+
+If direnv has already activated this project's shell, skip `nix develop`.
+Otherwise, enter the repository's Nix development shell, which puts the
+project-local Prime CLI on PATH:
+
+```bash
+nix develop
+prime --version
+prime whoami --plain
+```
+
+If authentication is needed:
+
+```bash
+prime login
+```
+
+The commands below use `--plain` where supported to match the terse output
+used by the agent. It is optional for manual use.
+
+### Bump and Publish
+
+Run regression tests before publishing code changes. To increment the patch
+version and publish a public v1 package:
+
+```bash
+prime env push --path environments/ifeval_goats --owner suvash --visibility PUBLIC --runtime v1 --auto-bump --plain
+```
+
+The last publish bumped `0.1.27` to `0.1.28`; running this again creates a
+new patch release. Use the version printed by the command in new configs.
+Keep `--runtime v1` explicit: the package's broad verifiers dependency lower
+bound does not identify its runtime correctly through automatic detection.
+Publishing is unnecessary when only changing run settings in a TOML.
+
+### Submit a Hosted Eval
+
+```bash
+prime eval run configs/eval/100_lets_get_goating.toml --hosted
+```
+
+Model, sampling, and rollout settings come from the TOML. Record the evaluation
+ID printed by the command. In the CLI used for these runs, hosted eval resolves
+the latest published package even when the TOML contains a version pin.
+Confirm the actual version in `eval_config.eval_command` or the startup logs;
+the run linked above resolved `0.1.28`.
+
+Set this to the ID returned by your submission. The value below is the existing
+`100_` eval:
+
+```bash
+EVAL_ID="bxh45jf9wbypz1jdtd7cpmu0"
+prime eval get "$EVAL_ID" --plain
+prime eval logs "$EVAL_ID" --tail 100 --plain
+prime eval samples "$EVAL_ID" --num 24 --plain
+```
+
+To follow logs continuously:
+
+```bash
+prime eval logs "$EVAL_ID" --follow --plain
+```
+
+Ctrl-C stops following logs; it does not stop the hosted job. Before using a
+new environment release for training, check that the eval completes with the
+expected sample count, no rollout errors, and populated reward/check metrics.
+
+### Submit Hosted Training
+
+```bash
+prime train run configs/train/100_lets_get_goating.toml --yes --plain
+```
+
+`--yes` skips the launch confirmation. Record the training run ID printed by
+the command; replace this example when submitting another run:
+
+```bash
+TRAIN_ID="y85g4v6ogy6r77j01581j05q"
+prime train get "$TRAIN_ID" --output json --plain
+prime train components "$TRAIN_ID" --plain
+prime train logs "$TRAIN_ID" --tail 100 --plain
+```
+
+Check the stored `environments` and `eval_config.environments`: both should
+contain the versioned `taskset.id` and `harness.id`, with
+`harness.runtime = { type = "prime", vm = true }`.
+
+For this shared-training backend, use indexed environment names to retrieve
+the actual worker logs. The unindexed form returned orchestrator logs during
+debugging:
+
+```bash
+prime train logs "$TRAIN_ID" --env ifeval-goats/0 --tail 100 --plain
+prime train logs "$TRAIN_ID" --env eval-ifeval-goats/0 --tail 100 --plain
+prime train logs "$TRAIN_ID" --follow --plain
+```
+
+### Verify Training Progress
+
+```bash
+prime train progress "$TRAIN_ID" --plain
+prime train metrics "$TRAIN_ID" --min-step 0 --max-step 5 --plain
+prime train rollouts "$TRAIN_ID" --step 0 --num 24 --plain
+prime train checkpoints "$TRAIN_ID" --output json --plain
+prime train usage "$TRAIN_ID" --output json --plain
+```
+
+Use a step listed by `progress` when requesting rollouts. `--num 24` above
+is a sample preview; the current training batch contains 128 samples.
+
+Look for:
+
+- Advancing steps, changing policy versions, and saved checkpoints. A
+  `rollout done` log alone only proves generation and scoring.
+- `metrics/ifeval-goats/chk_*`, `visible_reward`, and `hidden_reward`
+  in training metrics, plus `reward/ifeval-goats/mean` for the combined score.
+- Per-sample `reward` matching the weighted visible/hidden formula. The
+  rollout API returns `metrics` as a JSON-encoded string; the combined score
+  is in the separate `reward` field.
+- Nonzero sample advantages for at least some groups. Equal rewards within
+  a group can produce zero advantages even when scoring is working.
+
+The dashboard's Config tab may show only the generic `run_config` block.
+`prime train get` also exposes the separately stored model, batch settings,
+environment selectors, and eval settings.
+
+### Stop Jobs
+
+To intentionally stop a hosted job:
+
+```bash
+prime eval stop "$EVAL_ID" --plain
+prime train stop "$TRAIN_ID" --plain
+```
+
+Training stop prompts for confirmation; add `--force` to skip that prompt.
 
 ## Develop
 
@@ -82,9 +256,9 @@ selects the v0 bridge in the hosted training runtime; it cannot run this native
 v1 environment. The package now reports that configuration error immediately.
 Prime's VM runtime is selected explicitly because container sandboxes are retired.
 
-`configs/train/33_initial_bait_prompts_exploration_native_v1.toml` (at the
-repository root) targets the published `0.1.28` v1 package.
-Earlier configs remain historical records.
+The current `configs/train/100_lets_get_goating.toml` uses this native
+selector for both training and evaluation. The earlier `33_` config was the
+successful 20-step validation run and remains a historical record.
 
 ## Regression Tests
 
@@ -128,7 +302,9 @@ The integration tests require permission to bind localhost sockets.
 
 ## Task Data
 
-Each emitted `IfevalGoatsTask` has these task data attributes:
+On the task-centric API, each emitted `IfevalGoatsTask` carries these
+attributes in `task.data`. On the taskset-centric training API, they are
+fields directly on the typed task:
 
 | Field | Description |
 | --- | --- |
